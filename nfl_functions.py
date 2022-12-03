@@ -6,9 +6,17 @@ from scipy import spatial
 import nfl_acquire_and_prep as acquire
 
 '''
-The following functions are built to create the metrics for various levels of analysis (play, game, season)
-!!! Can also create a bunch of features and then run a neural net to see what combination is related to pressure
-!!! For that I would score: 1 - Incomplete, No Pressure, 3 - Beat Lineman, 6 - Hurry, 10 - Hit, 15 - Sack
+The following functions are built to create novel features and metrics for various levels of analysis (play, game, season.
+They can also produce simple graphical representations of plays to compare with these metrics and features.
+The function 'full_analysis' emits a dataframe where each pass rusher has a number of metrics along with basic pass
+rush stats.
+
+ToDo:
+1. Add option to pick metrics, beyond 'return pursuit angle'
+    - Perhaps create a seperate .py file full of functions to use
+2. Rename this file as defensive_nfl_functions, and create new .py file that can pull from this to analyze ofenseive players
+vs. defensive players of this metric.
+3. Finish commenting and all that jazz
 '''
 
 # -----------------------------------------------------------------------------------------------------------------
@@ -17,12 +25,15 @@ The following functions are built to create the metrics for various levels of an
 
 def full_analysis(return_pursuit_angle = True):
     '''
-    Emits a dataframe with each pass rusher's metric for weeks 1-8, along with the outcome from the scouting report.
+    Emits a dataframe with each pass rusher's metrics for weeks 1-8, along with the outcome from the scouting report.
     '''
+    # Acquire pass rushers
     pass_rushers_df = acquire.scout_pass_rush()
     
+    # Create dataframe to hold results
     all_game_metrics = pd.DataFrame()
     
+    # Iterate through each weekly dataset and run function to acquire that week's metrics
     for i in range(8):
         week_df = acquire.week(i+1)
         
@@ -35,14 +46,18 @@ def full_analysis(return_pursuit_angle = True):
 
 def week_analysis(week_df, pass_rushers_df, return_pursuit_angle = True):
     '''
-    Emits a dataframe with each pass rushers metric for the week, along with the outcome from the scouting report.
+    Emits a dataframe with each pass rushers metrics for the week, along with the outcome from the scouting report.
     '''
+    # Get a dict of game:plays for the chosen week
     week_game_plays = plays_by_game(week_df)
     
+    # Pull games from dict
     games = week_game_plays.keys()
     
+    # Create dataframe to hold results
     week_metrics = pd.DataFrame()
     
+    # Loop through games and pull metrics
     for game in games:
  
         game_metrics = pd.DataFrame(game_analysis(pass_rushers_df, week_df, game, return_pursuit_angle = return_pursuit_angle))
@@ -54,7 +69,7 @@ def week_analysis(week_df, pass_rushers_df, return_pursuit_angle = True):
 
 def game_analysis(pass_rushers_df, week_df, game, return_pursuit_angle = True):
     '''
-    Emits a dataframe with each pass rushers metric for the game, along with the outcome from the scouting report.
+    Emits a dataframe with each pass rushers metrics for the game, along with the outcome from the scouting report.
     '''
     game_plays = plays_by_game(week_df)
     plays = game_plays[game]
@@ -65,7 +80,7 @@ def game_analysis(pass_rushers_df, week_df, game, return_pursuit_angle = True):
 
         # Added a try except since there are errors when the snap events are missing
         try:
-            play_metrics = pd.DataFrame(play_analysis(pass_rushers_df, week_df, game, play, return_pursuit_angle = return_pursuit_angle))
+            play_metrics = pd.DataFrame(play_analysis(pass_rushers_df, week_df, game, play, return_graph = False, return_pursuit_angle = return_pursuit_angle))
 
             game_metrics = pd.concat([game_metrics, play_metrics])
         
@@ -79,7 +94,7 @@ def play_analysis(pass_rushers_df, week_df, game, play, return_graph = True, ret
     '''
     Emits a dataframe with each pass rushers metric for the play, along with the outcome from the scouting report.
     '''
-    play_pass_rush = nf.get_play_pass_rushers(pass_rushers_df, game, play)
+    play_pass_rush = get_play_pass_rushers(pass_rushers_df, game, play)
 
     # The data structure to hold the metric results
     play_metrics = pd.DataFrame()
