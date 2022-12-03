@@ -3,70 +3,148 @@ import pandas as pd
 
 from scipy import spatial
 
+import nfl_acquire_and_prep as acquire
+
 '''
-The following functions are built to create the Chase Metric for various levels of analysis (play, game, season)
+The following functions are built to create the metrics for various levels of analysis (play, game, season)
+!!! Can also create a bunch of features and then run a neural net to see what combination is related to pressure
+!!! For that I would score: 1 - Incomplete, No Pressure, 3 - Beat Lineman, 6 - Hurry, 10 - Hit, 15 - Sack
 '''
 
 # -----------------------------------------------------------------------------------------------------------------
-# MASTER FUNCTIONS
+# METRIC ANALYSIS FUNCTIONS
 # -----------------------------------------------------------------------------------------------------------------
 
-def analysis_dataframe():
+def full_analysis(return_pursuit_angle = True):
     '''
-    This would be a dataframe where each column was a week, and each row a player.  Would then have a total.
+    Emits a dataframe with each pass rusher's metric for weeks 1-8, along with the outcome from the scouting report.
     '''
-
-
-# -----------------------------------------------------------------------------------------------------------------
-# ACQUIRE AND PREPARE DATA
-# -----------------------------------------------------------------------------------------------------------------
-
-def prep_scout_data(scout_csv):
-    '''
-    Takes in NFL PFF scouting data (in csv form) and distills it into dataframe of pass rushers and their outcomes.
-    '''
-    # Pull in data
-    scout = pd.read_csv(scout_csv)
-
-    # Isolate pass rushers
-    pass_rushers = scout[scout.pff_role == 'Pass Rush']
-
-    # Strip unnecessary columns, rename and retype
-    pass_rushers = pass_rushers[['gameId',
-                                    'playId',
-                                    'nflId',
-                                    'pff_positionLinedUp',
-                                    'pff_hit',
-                                    'pff_hurry',
-                                    'pff_sack',]].rename(columns = {'gameId':'game',
-                                                                    'playId':'play',
-                                                                    'pff_positionLinedUp':'position',
-                                                                    'pff_hit':'hit',
-                                                                    'pff_hurry':'hurry',
-                                                                    'pff_sack':'sack'}).astype({'hit':int,
-                                                                                                'hurry':int,
-                                                                                                'sack':int})
-
-    # Create a feature indicating if there was a hit, hurry or sack
-    # !-In future, look into weighing these
-    pass_rushers['pressure'] = pass_rushers.hit + pass_rushers.hurry + pass_rushers.sack
-
-    return pass_rushers
-
-
-def prep_weekly_data(week_csv):
-    '''
-    Takes in weekly player tracking data (in csv form) and distills it into dataframe for further analysis.
-    '''
-    # Pull in data
-    week = pd.read_csv(week_csv)
-
-    # Strip unecessary columns, rename fill NaNs (all for the 'football' and retype)
-    week = week.drop(columns = ['time','playDirection','team','jerseyNumber']).rename(columns = {'gameId':'game',
-                                                                        'playId':'play',
-                                                                        'frameId':'frame',}).fillna(0).astype({'nflId':int})
+    pass_rushers_df = acquire.scout_pass_rush()
     
-    return week
+    all_game_metrics = pd.DataFrame()
+    
+    for i in range(8):
+        week_df = acquire.week(i+1)
+        
+        week_metrics = week_analysis(week_df, pass_rushers_df, return_pursuit_angle = return_pursuit_angle)
+        
+        all_game_metrics = pd.concat([all_game_metrics, week_metrics])
+        
+    return all_game_metrics
+
+
+def week_analysis(week_df, pass_rushers_df, return_pursuit_angle = True):
+    '''
+    Emits a dataframe with each pass rushers metric for the week, along with the outcome from the scouting report.
+    '''
+    week_game_plays = plays_by_game(week_df)
+    
+    games = week_game_plays.keys()
+    
+    week_metrics = pd.DataFrame()
+    
+    for game in games:
+ 
+        game_metrics = pd.DataFrame(game_analysis(pass_rushers_df, week_df, game, return_pursuit_angle = return_pursuit_angle))
+
+        week_metrics = pd.concat([week_metrics, game_metrics])        
+
+    return week_metrics 
+
+
+def game_analysis(pass_rushers_df, week_df, game, return_pursuit_angle = True):
+    '''
+    Emits a dataframe with each pass rushers metric for the game, along with the outcome from the scouting report.
+    '''
+    game_plays = plays_by_game(week_df)
+    plays = game_plays[game]
+
+    game_metrics = pd.DataFrame()
+
+    for play in plays:
+
+        # Added a try except since there are errors when the snap events are missing
+        try:
+            play_metrics = pd.DataFrame(play_analysis(pass_rushers_df, week_df, game, play, return_pursuit_angle = return_pursuit_angle))
+
+            game_metrics = pd.concat([game_metrics, play_metrics])
+        
+        except:
+            print('Error loading (game, play):',game, play)
+
+    return game_metrics
+
+
+def play_analysis(pass_rushers_df, week_df, game, play, return_graph = True, return_pursuit_angle = True):
+    '''
+    Emits a dataframe with each pass rushers metric for the play, along with the outcome from the scouting report.
+    '''
+    play_pass_rush = nf.get_play_pass_rushers(pass_rushers_df, game, play)
+
+    # The data structure to hold the metric results
+    play_metrics = pd.DataFrame()
+    
+    # The data structure to hold the graphing coordiantes
+    graph_input = pd.DataFrame()
+    
+    # The data structure to hold the ids for the graph
+    graph_ids = {}
+    
+    for pass_rusher in play_pass_rush.nflId:
+        line_of_scrimmage, pass_rusher_analysis_frames, player_metrics = player_play_analysis(pass_rushers_df, week_df, pass_rusher, game, play, return_pursuit_angle = return_pursuit_angle)
+        
+        player_metrics = pd.DataFrame(player_metrics)
+        
+        play_metrics = pd.concat([play_metrics, player_metrics])
+        
+        graph_input = pd.concat([graph_input, pass_rusher_analysis_frames[['x','y']]])
+        
+        graph_ids[pass_rusher] = [pass_rusher_analysis_frames.x.iloc[0],pass_rusher_analysis_frames.y.iloc[0]]
+
+    # Now get the ball data
+    ball_graph_input = pass_rusher_analysis_frames[['ball_x','ball_y']]
+    
+    if return_graph == True:
+        create_play_graph(line_of_scrimmage, graph_ids, graph_input, ball_graph_input)
+    
+    return play_metrics
+
+
+def player_play_analysis(pass_rushers_df, week_df, pass_rusher, game, play, return_graph = False, return_pursuit_angle = True):
+    '''
+    Create a single player analysis
+    '''
+    # Isolate player
+    play_pass_rushers = get_play_pass_rushers(pass_rushers_df, game, play)
+    play_pass_rusher = play_pass_rushers[play_pass_rushers.nflId == pass_rusher]
+
+    play_frames_df = get_play_frames(week_df, game, play)
+
+    line_of_scrimmage, football_frames_df = play_fb_frames(play_frames_df)
+
+    pass_rusher_analysis_frames = create_pass_rusher_analysis_frames(football_frames_df, play_frames_df, pass_rusher)
+
+    pass_rusher_analysis_frames =  pass_rusher_game_play_metric_frames(pass_rusher_analysis_frames)
+
+    metric = player_play_metric(pass_rusher_analysis_frames, return_pursuit_angle = return_pursuit_angle)
+
+    if return_pursuit_angle == True:
+            play_metric = metric[0]
+            play_pursuit_angles = metric[1]
+
+    else:
+        play_metric = metric
+
+    # Optional Graph
+    if return_graph == True:
+        create_single_player_graph(pass_rusher_analysis_frames, line_of_scrimmage)
+    
+    player_metrics = {'Player':play_pass_rusher.nflId,'Metrics':play_metric, 'Hit':play_pass_rusher.hit, 'Hurry':play_pass_rusher.hurry, 'Sack':play_pass_rusher.sack, 'Pressure':play_pass_rusher.pressure}
+
+    if return_pursuit_angle == True:
+        player_metrics['Pursuit Angle'] = play_pursuit_angles
+
+    return line_of_scrimmage, pass_rusher_analysis_frames, player_metrics
 
 
 # -----------------------------------------------------------------------------------------------------------------
@@ -75,15 +153,12 @@ def prep_weekly_data(week_csv):
 
 def get_play_pass_rushers(pass_rushers_df, game, play):
     '''
-    Returns the the list of all pass rushers for a given play.
+    Returns the the list of all pass rushers and their pressure stats for a given play.
     '''
     # Selects players who pass rushed on a given play
-    play_pass_rush = pass_rushers_df[pass_rushers_df.game == game][pass_rushers_df.play == play]
+    play_pass_rushers_df = pass_rushers_df[pass_rushers_df.game == game][pass_rushers_df.play == play]
 
-    # Makes a list of pass rushers by NFL ID
-    pass_rush_list = list(play_pass_rush.nflId)
-
-    return pass_rush_list
+    return play_pass_rushers_df
 
 
 def get_play_frames(week_df, game, play):
@@ -91,9 +166,9 @@ def get_play_frames(week_df, game, play):
     Takes in the full weekly dataframe and returns selected play from a selected game in 0.1 second frames.
     '''
     # Extract frames for a given play
-    play_frames = week_df[week_df.game == game][week_df.play == play]
+    play_frames_df = week_df[week_df.game == game][week_df.play == play]
 
-    return play_frames
+    return play_frames_df
 
 
 def play_fb_frames(play_frames_df):
@@ -101,38 +176,40 @@ def play_fb_frames(play_frames_df):
     Isolates the football frames (football movement over the course of the play) for a given play.
     '''
     # nflId for the football is 0, creates a dataframe of the football over the play
-    football_frames = play_frames_df[play_frames_df.nflId == 0].set_index('frame',drop = True)
+    football_frames_df = play_frames_df[play_frames_df.nflId == 0].set_index('frame',drop = True)
 
     # Get the x value for the line of scrimmage (for use with play graphing)
-    line_of_scrimmage = football_frames.x.iloc[0]
+    line_of_scrimmage = football_frames_df.x.iloc[0]
 
     # Remove all frames before snap and after event where ball is no longer being pass rushed
-    snap_frame, end_frame = determine_pertinent_frames(football_frames)
-    football_frames = football_frames[(football_frames.index >= snap_frame) & (football_frames.index <= end_frame)]
+    snap_frame, end_frame = determine_pertinent_frames(football_frames_df)
+    football_frames_df = football_frames_df[(football_frames_df.index >= snap_frame) & (football_frames_df.index <= end_frame)]
 
     # Clean the frames up
-    football_frames = clean_fb_frames(football_frames)
+    football_frames_df = clean_fb_frames(football_frames_df)
 
-    return line_of_scrimmage, football_frames
+    return line_of_scrimmage, football_frames_df
 
 
-def create_pass_rusher_analysis_frames(football_frames, play_frames, pass_rusher):
+def create_pass_rusher_analysis_frames(football_frames_df, play_frames_df, pass_rusher):
     '''
     Merges football location data with player location on a 0.1s frame by frame basis data to compare the two to create the metrics
     '''
     # Create a dataframe which pairs the location and movement with the football and the pass risher, frame by frame (0.1 second intervals)
-    pass_rusher_analysis_frames = football_frames.merge(play_frames[play_frames.nflId == pass_rusher].set_index('frame',drop = True),
+    pass_rusher_analysis_frames = football_frames_df.merge(play_frames_df[play_frames_df.nflId == pass_rusher].set_index('frame',drop = True),
                                         on = 'frame', how = 'left').reset_index(drop = True)
 
     return pass_rusher_analysis_frames
 
+
 # -----------------------------------------------------------------------------------------------------------------
-# DATAFRAME BUILD SUPPORT FUNCTIONS
+# DATAFRAME BUILDING SUPPORT FUNCTIONS
 # -----------------------------------------------------------------------------------------------------------------
 
 def determine_pertinent_frames(football_frames):
     '''
     This function determines the indices of the relevant frames for pass rush analysis.
+    Returns the starting (snap) index and the ending index for the analysis.  
     '''
     # Initiate a trigger which tells the function to start checking the events after ball snap for the end event (when qb passes, is sacked, etc.)
     trigger = 0
@@ -173,77 +250,211 @@ def clean_fb_frames(football_frames):
 
 
 # -----------------------------------------------------------------------------------------------------------------
-#  METRICS FUNCTIONS
+#  METRICS CREATION FUNCTION
 # -----------------------------------------------------------------------------------------------------------------
 
-def metrics(pass_rusher_analysis_frames, return_graph = False, line_of_scrimmage = 0):
+def player_play_metric(pass_rusher_analysis_frames, return_pursuit_angle = False):
     '''
-    Creates the metric features and intermediate columns to get to them.  Returns the metrics.
+    Emits the player's metric for the play.  Also emits the pursuit angle, which itself *might* be indicative of something...
     '''
-    # Determine distance between the football and the pass rusher for each frame using the pythagorean formula.
-    pass_rusher_analysis_frames['distance'] = ((pass_rusher_analysis_frames.x - pass_rusher_analysis_frames.ball_x)**2 +
-                                (pass_rusher_analysis_frames.y - pass_rusher_analysis_frames.ball_y)**2)**.5
+    if return_pursuit_angle == True:
+        return pass_rusher_analysis_frames.metric.mean(), pass_rusher_analysis_frames.pursuit_factor.mean()
+    
+    else:
+        return round(pass_rusher_analysis_frames.metric.mean(),3)
 
-    # Determine the change of distance between football player and ball from frame to frame.
-    # Note: negative number means player and ball are closer together at frame.
-    pass_rusher_analysis_frames['change_distance'] = pass_rusher_analysis_frames.distance.diff()  
 
-    # Shifting the x and y for the player allows to compare past coordiante location to present, giving us a movement vector
-    pass_rusher_analysis_frames['shift_x'] = pass_rusher_analysis_frames.x.shift(1)
-    pass_rusher_analysis_frames['shift_y'] = pass_rusher_analysis_frames.y.shift(1)
+def pass_rusher_game_play_metric_frames(pass_rusher_analysis_frames):
+    '''
+    Creates the metric for a given pass rusher for a given play in a given game.  Returns the metric and dataframe if desired.
+    '''
 
-    # Call pursuit angle function
+    # The next four lines use metric support functions below
+    pass_rusher_analysis_frames = get_distances(pass_rusher_analysis_frames)
+
+    pass_rusher_analysis_frames = add_prev_coord(pass_rusher_analysis_frames)
+
     pass_rusher_analysis_frames = find_pursuit_angle(pass_rusher_analysis_frames)
 
-    # Clean things up by removing first and last frame and dropping unecessary columns; lost data relatively unimpactful
+    pass_rusher_analysis_frames = find_escape_angle(pass_rusher_analysis_frames)
+
+    # Clean things up by removing first and last frame
     pass_rusher_analysis_frames = pass_rusher_analysis_frames[1:-1]
 
-    # Optional Graph
-    if return_graph == True:
-        create_graph(pass_rusher_analysis_frames, line_of_scrimmage)
+    pass_rusher_analysis_frames = true_pursuit(pass_rusher_analysis_frames)
 
-    # ***This is probably not necessary for production function***
+    # Drop unecessary columns
     pass_rusher_analysis_frames = pass_rusher_analysis_frames.drop(columns = ['ball_s','ball_a','game','play','s','a','o','dir','event'])
 
-    # !-The following is the current metric and can be replaced
-    pass_rusher_analysis_frames['test_factor_a'] = ((pass_rusher_analysis_frames.pursuit_angle * pass_rusher_analysis_frames.dis) - 
-                                                    pass_rusher_analysis_frames.change_distance)/pass_rusher_analysis_frames.distance
+    # ! *********The following is the current metric and can be replaced**********
+    pass_rusher_analysis_frames = metric_calculation(pass_rusher_analysis_frames)
+    # ! **************************************************************************
 
-    return pass_rusher_analysis_frames.pursuit_angle.mean(), pass_rusher_analysis_frames.test_factor_a.mean()
+    return pass_rusher_analysis_frames
+
+
+def metric_calculation(pass_rusher_analysis_frames):
+    pass_rusher_analysis_frames['metric'] = (pass_rusher_analysis_frames.prev_distance + pass_rusher_analysis_frames.true_pursuit)/(pass_rusher_analysis_frames.ball_player_distance)
+
+    return pass_rusher_analysis_frames
+
 
 # -----------------------------------------------------------------------------------------------------------------
 #  METRICS SUPPORT FUNCTIONS
 # -----------------------------------------------------------------------------------------------------------------
 
+def get_distances(pass_rusher_analysis_frames):
+    '''
+    Gets current frame distance as well as adds previous frame distance to dataframe
+    '''
+    # Simply use pythagorean formula to calculate distance at time of frame based on x and y coordinates
+    pass_rusher_analysis_frames['ball_player_distance'] = ((pass_rusher_analysis_frames.x - pass_rusher_analysis_frames.ball_x)**2 +
+                                (pass_rusher_analysis_frames.y - pass_rusher_analysis_frames.ball_y)**2)**.5
+
+    # Since the previous locations are required for the calculation of the metric later on, create a column with previous distance
+    pass_rusher_analysis_frames['prev_distance'] = pass_rusher_analysis_frames.ball_player_distance.shift(1)
+
+    return pass_rusher_analysis_frames
+
+
+def add_prev_coord(pass_rusher_analysis_frames):
+    '''
+    Adds previous coordinates of ball and pass rusher to dataframe
+    '''  
+    # Shifting the x and y allows to compare past coordinate location to present, giving us a movement vector
+    pass_rusher_analysis_frames['shift_x'] = pass_rusher_analysis_frames.x.shift(1)
+    pass_rusher_analysis_frames['shift_y'] = pass_rusher_analysis_frames.y.shift(1)
+
+    # Shifting the x and y for the ball as well to get its movement vector
+    pass_rusher_analysis_frames['shift_ball_x'] = pass_rusher_analysis_frames.ball_x.shift(1)
+    pass_rusher_analysis_frames['shift_ball_y'] = pass_rusher_analysis_frames.ball_y.shift(1)
+
+    return pass_rusher_analysis_frames
+
+
 def find_pursuit_angle(pass_rusher_analysis_frames):
     '''
-    I am sure there is a way to calcualte directly in df using assign, but this calcualtes the angle between the player
-    and the ball after they both move, and the direction the player actually moved in that interval.  A negative value
-    means the player is moving in a direction away from the ball; a zero (0) value means they are moving perpendicular
-    to it; for positive values, the closer to one the more direct the movement - a value of one means they move directly
-    towards the ball in that interval.
+    Calcualtes the angle between the player and the ball after they both move, and the direction the player actually 
+    moved in that interval.  A negative value means the player is moving in a direction away from the ball; a zero (0) 
+    value means they are moving perpendicular to it; for positive values, the closer to one the more direct the movement -
+    a value of one means they move directly towards the ball in that interval.
     '''
-    # Need to initialize with a value to account for the shift
-    cosine_factor = [[0,0]]
+    # Need to initialize with a value to account for the shift, this frame will later be dropped
+    pursuit_angle_factor = [[0,0]]
 
-    # Create vectors with the tails at a player's location in frame 'i', with the heads at the player location and ball 
-    # location in frame 'i+1' 
     for i in pass_rusher_analysis_frames.index[1:]:
-        cosine_factor.append(
+        pursuit_angle_factor.append(
             1 - spatial.distance.cosine(
                 [round(pass_rusher_analysis_frames.x.iloc[i]-pass_rusher_analysis_frames.shift_x.iloc[i],3),
                 round(pass_rusher_analysis_frames.y.iloc[i]-pass_rusher_analysis_frames.shift_y.iloc[i],3)],
                 [round(pass_rusher_analysis_frames.ball_x.iloc[i]-pass_rusher_analysis_frames.shift_x.iloc[i],3),
                 round(pass_rusher_analysis_frames.ball_y.iloc[i]-pass_rusher_analysis_frames.shift_y.iloc[i],3)]))
 
-    pass_rusher_analysis_frames['pursuit_angle'] = cosine_factor
+    # Add this list as a dataframe column
+    pass_rusher_analysis_frames['pursuit_factor'] = pursuit_angle_factor
 
     return pass_rusher_analysis_frames
 
 
-def create_graph(pass_rusher_analysis_frames, line_of_scrimmage):
+def find_escape_angle(pass_rusher_analysis_frames):
     '''
-    Creates a simple graph of the ball and the ball
+    Similar to the pursuit angle, calculates how the ball is moving in relation to the pass rusher
+    '''
+    # Need to initialize with a value to account for the shift, this frame will later be dropped
+    escape_angle_factor = [[0,0]]
+
+    for i in pass_rusher_analysis_frames.index[1:]:
+        escape_angle_factor.append(
+            1 - spatial.distance.cosine(
+                [round(pass_rusher_analysis_frames.ball_x.iloc[i]-pass_rusher_analysis_frames.shift_ball_x.iloc[i],3),
+                round(pass_rusher_analysis_frames.ball_y.iloc[i]-pass_rusher_analysis_frames.shift_ball_y.iloc[i],3)],
+                [round(pass_rusher_analysis_frames.x.iloc[i]-pass_rusher_analysis_frames.shift_ball_x.iloc[i],3),
+                round(pass_rusher_analysis_frames.y.iloc[i]-pass_rusher_analysis_frames.shift_ball_y.iloc[i],3)]))
+
+    # Add this list as a dataframe column
+    pass_rusher_analysis_frames['escape_factor'] = escape_angle_factor
+
+    return pass_rusher_analysis_frames
+
+
+def true_pursuit(pass_rusher_analysis_frames):
+    '''
+    This function combines the effects of 'pursuit' and 'escape' to see how the rusher is pursuing the ball, independent
+    of the quarterback's movement.
+    '''
+    pass_rusher_analysis_frames['pursuit'] = pass_rusher_analysis_frames.dis * pass_rusher_analysis_frames.pursuit_factor
+    pass_rusher_analysis_frames['escape'] = pass_rusher_analysis_frames.ball_dis * -pass_rusher_analysis_frames.escape_factor
+
+    pass_rusher_analysis_frames['true_pursuit'] = pass_rusher_analysis_frames.pursuit + pass_rusher_analysis_frames.escape
+
+    return pass_rusher_analysis_frames
+
+# -----------------------------------------------------------------------------------------------------------------
+#  GRAPHING FUNCTIONS
+# -----------------------------------------------------------------------------------------------------------------
+
+def create_play_graph(line_of_scrimmage, graph_ids, graph_input, ball_graph_input):
+    '''
+    Creates a graph of all pass rushers on a given play
+    '''
+     # Import graphics libraries
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    
+    # Create figure
+    plt.figure(figsize = [9,9])
+    plt.title('---- Pass Rusher (red) vs. Ball (green) by Frame ----\nFrames go from Light (snap) to Dark (end of play)', fontsize = 16)
+    plt.xlabel('Absolute Yardline')
+    plt.ylabel('')
+    
+    # Create and graph the datapoints
+    sns.scatterplot(x = ball_graph_input.ball_x, y = ball_graph_input.ball_y, hue = ball_graph_input.index, palette = 'Greens', legend = False)
+    sns.scatterplot(x = graph_input.x, y = graph_input.y, hue = graph_input.index, palette = 'Reds', legend = False)
+   
+    # Create the frame labels for the players
+    for mark in zip(graph_input.index,graph_input.x,graph_input.y):
+        plt.annotate(mark[0],
+                    (mark[1], mark[2]),
+                    textcoords = 'offset points',
+                    xytext = (4,4),
+                    ha = 'center',
+                    fontsize = 8)
+
+    # Create the frame labels for the football
+    for mark in zip(ball_graph_input.index,ball_graph_input.ball_x,ball_graph_input.ball_y):
+        plt.annotate(mark[0],
+                    (mark[1], mark[2]),
+                    textcoords = 'offset points',
+                    xytext = (4,4),
+                    ha = 'center',
+                    fontsize = 8)
+        
+    # Create the labels to identify which rusher is whom
+    for identity in graph_ids:
+        plt.annotate(identity,
+                    (graph_ids[identity][0],graph_ids[identity][1]),
+                    textcoords = 'offset points',
+                    xytext = (-8,-4),
+                    ha = 'right',
+                    fontsize = 12)
+ 
+    # At figsize = [12,12], the line width of the line of scrimmage = 19.2; change in proportion to this
+    plt.axvline(x = line_of_scrimmage,
+                lw = 14.4,
+                alpha = 0.2)
+    plt.axvline(x = line_of_scrimmage)
+    plt.text(line_of_scrimmage, (ball_graph_input.ball_y.mean() + graph_input.y.mean())/2, 
+            f'Line of Scrimmage\n~{int(line_of_scrimmage)} yard line',
+            fontsize = 15, rotation = 90,
+            ha = 'center',
+            va = 'top')
+
+    plt.show()
+
+
+def create_single_player_graph(pass_rusher_analysis_frames, line_of_scrimmage):
+    '''
+    Creates a graph of the ball and a single pass rusher
     '''
     # Import graphics libraries
     import seaborn as sns
@@ -255,11 +466,11 @@ def create_graph(pass_rusher_analysis_frames, line_of_scrimmage):
     plt.xlabel('Absolute Yardline')
     plt.ylabel('')
     
-    # Create and graphe the datapoints
+    # Create and graph the datapoints
     sns.scatterplot(x = pass_rusher_analysis_frames.ball_x, y = pass_rusher_analysis_frames.ball_y, hue = pass_rusher_analysis_frames.index, palette = 'Greens', legend = False)
     sns.scatterplot(x = pass_rusher_analysis_frames.x, y = pass_rusher_analysis_frames.y, hue = pass_rusher_analysis_frames.index, palette = 'Reds', legend = False)
    
-    # Create the frame lables for the player
+    # Create the frame labels for the player
     for mark in zip(pass_rusher_analysis_frames.index,pass_rusher_analysis_frames.x,pass_rusher_analysis_frames.y):
         plt.annotate(mark[0],
                     (mark[1], mark[2]),
@@ -267,6 +478,7 @@ def create_graph(pass_rusher_analysis_frames, line_of_scrimmage):
                     xytext = (4,4),
                     ha = 'center',
                     fontsize = 8)
+
     # Create the frame labels for the football
     for mark in zip(pass_rusher_analysis_frames.index,pass_rusher_analysis_frames.ball_x,pass_rusher_analysis_frames.ball_y):
         plt.annotate(mark[0],
@@ -286,7 +498,7 @@ def create_graph(pass_rusher_analysis_frames, line_of_scrimmage):
             fontsize = 15, rotation = 90,
             ha = 'center',
             va = 'top')
-   
+
     plt.show()
 
 
@@ -294,13 +506,13 @@ def create_graph(pass_rusher_analysis_frames, line_of_scrimmage):
 #  TESTING FUNCTIONS
 # -----------------------------------------------------------------------------------------------------------------
 
-def random_play(week):
+def random_play(week1_df):
     '''
-    Creates a random play to analyze
+    Creates a random play to analyze using week 1 plays
     '''
     week_game_plays = []
-    for game in week.game.unique():
-        for play in week[week.game == game].play.unique():
+    for game in week1_df.game.unique():
+        for play in week1_df[week1_df.game == game].play.unique():
             week_game_plays.append((game,play))
     
     game_index = np.random.randint(0,1175)
@@ -309,3 +521,32 @@ def random_play(week):
     play = week_game_plays[game_index][1]
 
     return game, play
+
+
+# -----------------------------------------------------------------------------------------------------------------
+#  SUPPORT FUNCTIONS
+# -----------------------------------------------------------------------------------------------------------------
+def plays_by_game(week_df):
+    '''
+    Returns a dictionary with the keys being the games of the week and the values being a list of plays
+    '''
+    game_plays = {}
+    for game in week_df.game.unique():
+        plays = []
+        for play in week_df[week_df.game == game].play.unique():
+            plays.append(play)
+        game_plays[game] = plays
+
+    return game_plays
+
+def group_results(metrics_df):
+    '''
+    
+    '''
+    play_count = list(metrics_df.groupby(by = 'Player').Player.count())
+
+    metrics_df = metrics_df.groupby(by = 'Player').mean()
+
+    metrics_df['play_count'] = play_count
+
+    return metrics_df
