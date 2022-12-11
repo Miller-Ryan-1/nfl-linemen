@@ -8,6 +8,8 @@
 
 import pandas as pd
 import numpy as np
+import warnings 
+warnings.filterwarnings('ignore')
 
 
 def games():
@@ -75,7 +77,8 @@ def plays():
                                 'preSnapVisitorScore',
                                 'absoluteYardlineNumber',
                                 'homeTeamAbbr',
-                                'visitorTeamAbbr'])
+                                'visitorTeamAbbr',
+                                'game'])
 
     # Drop seven rows with Nulls
     plays = plays.dropna()
@@ -218,3 +221,53 @@ def scout_pass_block():
     scout_pass_block['block_fail'] = scout_pass_block.beaten_by_pass_rusher + scout_pass_block.hit_allowed + scout_pass_block.hurry_allowed + scout_pass_block.sack_allowed
 
     return scout_pass_block
+
+
+def get_players_in_play(game, play):
+    '''
+    Gets all of the NFL player ids along with their role for a given play.    
+    '''
+    scout_players = pd.read_csv('data/pffScoutingData.csv')
+
+    players = scout_players[['gameId',
+                            'playId',
+                            'nflId',
+                            'pff_role'
+                            'pff_positionLinedUp']].rename(columns = {'gameId':'game',
+                                                            'playId':'play',
+                                                            'pff_role':'role',
+                                                            'pff_positionLinedUp':'position'})
+
+    players = players[players.game == game][players.play == play]
+
+    return players
+
+
+def all_plays():
+    '''
+    Creates a data object with all plays from the 8 weeks.
+    * I have a feeling this is not the most efficient way to do this...
+    '''
+    # Load the plays dataframe
+    plays = plays()
+
+    # Create the data structure to return {game: [{play: [players]}]}
+    game_play_players = {}  
+
+    # Loop through all of the games to pull out their plays and the players invovled
+    for game in plays.gameId.unique():
+        game_play_list = {}
+
+        for play in plays[plays.gameId == game].playId.unique():
+            play_player_dict = {}
+            play_player_list = []
+
+            for player in plays[plays.playId == play][plays.gameId == game].nflId:
+                play_player_list.append(player)
+
+            play_player_dict[play] = play_player_list
+            game_play_list.update(play_player_dict)
+
+        game_play_players[game] = game_play_list
+
+    return game_play_players
