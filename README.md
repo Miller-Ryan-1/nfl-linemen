@@ -8,7 +8,7 @@ Repo includes the following Jupyter notebooks where functions were developed and
 1. Data Review [data_review.ipynb] - My cleaning pipeline applied to the NFL data provided.
 2. Creating a Base Playframe [base_play_frame_workbook.ipynb] - For a given player on a given play, get their movement details and integrate with play-level stats and outcomes.
 3. Create Unique Metrics [metrics_build_workbook.ipynb] - Creates metrics around force and movement vectors.  Also includes graphing functions.
-4. Aggregating the Metrics for plays, teams, players, etc. [metrics_ise_workbook.ipynb] - Allows use of passrush efficiency and force metrics for comparison.
+4. Aggregating the Metrics for plays, teams, players, etc. [metrics_use_workbook.ipynb] - Allows use of passrush efficiency and force metrics for comparison.
 5. EDA and Modeling ['EDA and Modeling.ipynb'] - Most of this is draft work.
 
 From those Jupyter notebooks, the following .py files were created that reflect the functions developed with them:
